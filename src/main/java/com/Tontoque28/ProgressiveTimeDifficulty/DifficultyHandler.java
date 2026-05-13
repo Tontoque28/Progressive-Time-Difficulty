@@ -6,12 +6,15 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -63,6 +66,7 @@ public class DifficultyHandler {
     public static final String NBT_KEY_FORCE_OVERCHARGE = "ptd_force_overcharge";
     public static final String NBT_KEY_MAGIC_DMG_MULT = "ptd_magic_dmg_mult";
     private static final String NBT_KEY_DIFFICULTY_FACTOR = "ptd_factor";
+    private static final String NBT_KEY_SOUL_EATER_FACTOR = "ptd_soul_eater_factor";
 
     private static final UUID HP_MOD_UUID = UUID.fromString("c0d0b000-0000-0000-0000-000000000001");
     private static final UUID DMG_MOD_UUID = UUID.fromString("c0d0b000-0000-0000-0000-000000000002");
@@ -202,24 +206,46 @@ public class DifficultyHandler {
         if (entity.level().isClientSide) return;
         if (entity instanceof Player) return;
 
-        if (entity.tickCount % 20 != 0) return; // Cada segundo
+        if (entity.tickCount % 20 == 0) { // Cada segundo
+            CompoundTag nbt = entity.getPersistentData();
+            if (nbt.getBoolean(NBT_KEY_BUFFED)) {
+                // Overcharge Tag Logic
+                boolean canOvercharge = nbt.getBoolean(NBT_KEY_CAN_OVERCHARGE);
+                boolean forceOvercharge = nbt.getBoolean(NBT_KEY_FORCE_OVERCHARGE);
+                boolean isOverchargeActive = canOvercharge || forceOvercharge;
+                
+                boolean isActiveThreat = false;
+                if (entity instanceof Mob mob) {
+                    isActiveThreat = mob.getTarget() instanceof Player;
+                }
 
-        CompoundTag nbt = entity.getPersistentData();
-        if (!nbt.getBoolean(NBT_KEY_BUFFED)) return;
+                if (isOverchargeActive && isActiveThreat) {
+                    if (!entity.hasCustomName() || !entity.getCustomName().getString().equals("§c§lOVERCHARGED")) {
+                        entity.setCustomName(Component.literal("§c§lOVERCHARGED"));
+                        entity.setCustomNameVisible(true);
+                    }
+                } else {
+                    if (entity.hasCustomName() && entity.getCustomName().getString().equals("§c§lOVERCHARGED")) {
+                        entity.setCustomName(null);
+                        entity.setCustomNameVisible(false);
+                    }
+                }
 
-        double factor = nbt.getDouble(NBT_KEY_DIFFICULTY_FACTOR);
-        if (factor < 0.5) return;
-
-        if (entity.level() instanceof ServerLevel serverLevel) {
-            if (factor >= 2.0) {
-                // Tier 3: Amenaza Extrema (Alma)
-                serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
-            } else if (factor >= 1.0) {
-                // Tier 2: Peligroso (Fuego)
-                serverLevel.sendParticles(ParticleTypes.FLAME, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
-            } else {
-                // Tier 1: Endurecido (Humo)
-                serverLevel.sendParticles(ParticleTypes.SMOKE, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
+                // Particle Logic
+                if (entity.level() instanceof ServerLevel serverLevel) {
+                    if (nbt.getDouble(NBT_KEY_SOUL_EATER_FACTOR) > 0) {
+                        serverLevel.sendParticles(ParticleTypes.WITCH, entity.getX(), entity.getY() + entity.getBbHeight() * 0.5, entity.getZ(), 3, entity.getBbWidth() * 0.5, entity.getBbHeight() * 0.5, entity.getBbWidth() * 0.5, 0.05);
+                    } else {
+                        double factor = nbt.getDouble(NBT_KEY_DIFFICULTY_FACTOR);
+                        if (factor >= 2.0) {
+                            serverLevel.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
+                        } else if (factor >= 1.0) {
+                            serverLevel.sendParticles(ParticleTypes.FLAME, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
+                        } else if (factor >= 0.5) {
+                            serverLevel.sendParticles(ParticleTypes.SMOKE, entity.getX(), entity.getY() + entity.getBbHeight() + 0.5, entity.getZ(), 1, 0.2, 0.2, 0.2, 0.02);
+                        }
+                    }
+                }
             }
         }
     }
@@ -309,13 +335,24 @@ public class DifficultyHandler {
             double magicMult = nbt.getDouble(NBT_KEY_MAGIC_DMG_MULT);
             player.sendSystemMessage(Component.literal(String.format("§d- Magic Dmg Bonus: x%.2f", magicMult)));
         }
+        if (nbt.contains(NBT_KEY_SOUL_EATER_FACTOR)) {
+            double soulEater = nbt.getDouble(NBT_KEY_SOUL_EATER_FACTOR);
+            player.sendSystemMessage(Component.literal(String.format("§5- Soul Eater Factor: +%.2f%%", soulEater * 100)));
+        }
     }
 
     public static boolean updateEntityBuffs(Entity entity) {
         if (!(entity instanceof LivingEntity livingEntity)) return false;
         if (entity instanceof Player) return false;
         
-        if (livingEntity instanceof Creeper || BLACKLIST.contains(livingEntity.getType())) {
+        // --- START EXCLUSION LOGIC ---
+        if (BLACKLIST.contains(livingEntity.getType())) {
+            removeBuffs(livingEntity);
+            return false;
+        }
+
+        ResourceLocation entityId = net.minecraftforge.registries.ForgeRegistries.ENTITY_TYPES.getKey(livingEntity.getType());
+        if (entityId != null && entityId.toString().equals("evilcraft:vengeance_spirit")) {
             removeBuffs(livingEntity);
             return false;
         }
@@ -326,7 +363,10 @@ public class DifficultyHandler {
             return false;
         }
         AttributeInstance damageAttr = livingEntity.getAttribute(Attributes.ATTACK_DAMAGE);
-        if (damageAttr == null || damageAttr.getBaseValue() <= 0) return false;
+        if (damageAttr == null || damageAttr.getBaseValue() <= 0) {
+            return false;
+        }
+        // --- END EXCLUSION LOGIC ---
 
         CompoundTag nbt = livingEntity.getPersistentData();
         if (!nbt.contains(NBT_KEY_CAN_OVERCHARGE)) {
@@ -334,32 +374,29 @@ public class DifficultyHandler {
             nbt.putBoolean(NBT_KEY_CAN_OVERCHARGE, roll);
         }
 
-        boolean canOvercharge = nbt.getBoolean(NBT_KEY_CAN_OVERCHARGE);
-        boolean forceOvercharge = nbt.getBoolean(NBT_KEY_FORCE_OVERCHARGE);
-        boolean isOverchargeActive = canOvercharge || forceOvercharge;
-
         long gameTime = entity.level().getLevelData().getGameTime();
         long playerTimeCalc = 0;
         long additionalTime = 0;
         String influencerName = "World";
-        boolean applyOverchargeTag = false;
+        Player influencingPlayer = null;
 
         if (entity.level() instanceof ServerLevel serverLevel) {
             DifficultySavedData data = DifficultySavedData.get(serverLevel);
             additionalTime = data.getAdditionalTime();
             
-            if (isOverchargeActive) {
+            boolean canOvercharge = nbt.getBoolean(NBT_KEY_CAN_OVERCHARGE);
+            boolean forceOvercharge = nbt.getBoolean(NBT_KEY_FORCE_OVERCHARGE);
+            if (canOvercharge || forceOvercharge) {
                 List<ServerPlayer> nearbyPlayers = serverLevel.getPlayers(p -> p.distanceToSqr(livingEntity) < 128 * 128);
-                int count = 0;
-                for (ServerPlayer p : nearbyPlayers) {
-                    playerTimeCalc += p.getPersistentData().getLong(NBT_KEY_PLAYER_TIME);
-                    count++;
-                }
-                
-                if (count > 0) {
-                    influencerName = count + " Players (Stacked)";
-                    if (count > 1 || forceOvercharge) {
-                        applyOverchargeTag = true;
+                if (!nearbyPlayers.isEmpty()) {
+                    influencingPlayer = nearbyPlayers.get(0); // For Soul Eater, we'll base it on the first nearby player
+                    int count = 0;
+                    for (ServerPlayer p : nearbyPlayers) {
+                        playerTimeCalc += p.getPersistentData().getLong(NBT_KEY_PLAYER_TIME);
+                        count++;
+                    }
+                    if (count > 0) {
+                        influencerName = count + " Players (Stacked)";
                     }
                 }
             } else {
@@ -370,6 +407,7 @@ public class DifficultyHandler {
                 }
 
                 if (nearestPlayer instanceof ServerPlayer serverPlayer) {
+                    influencingPlayer = serverPlayer;
                     playerTimeCalc = serverPlayer.getPersistentData().getLong(NBT_KEY_PLAYER_TIME);
                     influencerName = serverPlayer.getName().getString();
                 }
@@ -378,6 +416,19 @@ public class DifficultyHandler {
 
         long totalEffectiveTime = gameTime + additionalTime + playerTimeCalc;
         double difficultyFactor = calculateDifficultyFactor(entity.level(), totalEffectiveTime);
+
+        // Soul Eater Calculation
+        double soulEaterFactor = 0.0;
+        if (influencingPlayer != null && entity.level() instanceof ServerLevel sl && DifficultySavedData.get(sl).isHardcoreMode()) {
+            float playerMaxHealth = influencingPlayer.getMaxHealth();
+            if (playerMaxHealth > 20) {
+                soulEaterFactor = ((playerMaxHealth - 20) / 2.0) * 0.05;
+                if (soulEaterFactor > 0 && !nbt.contains(NBT_KEY_SOUL_EATER_FACTOR)) {
+                    entity.level().playSound(null, entity.blockPosition(), SoundEvents.SOUL_ESCAPE, SoundSource.HOSTILE, 1.0f, 1.0f);
+                }
+            }
+        }
+        nbt.putDouble(NBT_KEY_SOUL_EATER_FACTOR, soulEaterFactor);
 
         if (isBossEntity(livingEntity)) {
             difficultyFactor *= 1.20;
@@ -388,33 +439,14 @@ public class DifficultyHandler {
             difficultyFactor *= 0.5;
         }
 
-        if (difficultyFactor > 0) {
-            applyBuffs(livingEntity, difficultyFactor);
+        if (difficultyFactor > 0 || soulEaterFactor > 0) {
+            applyBuffs(livingEntity, difficultyFactor, soulEaterFactor);
             livingEntity.getPersistentData().putString(NBT_KEY_INFLUENCER, influencerName);
             livingEntity.getPersistentData().putBoolean(NBT_KEY_BUFFED, true);
             livingEntity.getPersistentData().putDouble(NBT_KEY_DIFFICULTY_FACTOR, difficultyFactor);
-            
-            if (applyOverchargeTag) {
-                if (!livingEntity.hasCustomName() || !livingEntity.getCustomName().getString().equals("OVERCHARGED")) {
-                    livingEntity.setCustomName(Component.literal("§c§lOVERCHARGED"));
-                    livingEntity.setCustomNameVisible(true);
-                }
-            } else {
-                if (livingEntity.hasCustomName() && livingEntity.getCustomName().getString().equals("OVERCHARGED")) {
-                    livingEntity.setCustomName(null);
-                    livingEntity.setCustomNameVisible(false);
-                }
-            }
             return true;
         } else {
             removeBuffs(livingEntity);
-            livingEntity.getPersistentData().remove(NBT_KEY_BUFFED);
-            livingEntity.getPersistentData().remove(NBT_KEY_MAGIC_DMG_MULT);
-            livingEntity.getPersistentData().remove(NBT_KEY_DIFFICULTY_FACTOR);
-            if (livingEntity.hasCustomName() && livingEntity.getCustomName().getString().equals("OVERCHARGED")) {
-                livingEntity.setCustomName(null);
-                livingEntity.setCustomNameVisible(false);
-            }
             return true;
         }
     }
@@ -561,7 +593,7 @@ public class DifficultyHandler {
         return days * percentagePerDay; 
     }
 
-    private static void applyBuffs(LivingEntity entity, double factor) {
+    private static void applyBuffs(LivingEntity entity, double factor, double soulEaterFactor) {
         boolean isHardcore = false;
         if (entity.level() instanceof ServerLevel sl) {
             isHardcore = DifficultySavedData.get(sl).isHardcoreMode();
@@ -572,7 +604,8 @@ public class DifficultyHandler {
         if (healthAttr != null) {
             baseHealth = healthAttr.getBaseValue();
             healthAttr.removeModifier(HP_MOD_UUID);
-            healthAttr.addPermanentModifier(new AttributeModifier(HP_MOD_UUID, "PTD Health Buff", factor * 1.0, AttributeModifier.Operation.MULTIPLY_TOTAL)); // REBAJADO: 1.2 -> 1.0
+            double healthMultiplier = (factor * 1.0) + (soulEaterFactor * 0.25);
+            healthAttr.addPermanentModifier(new AttributeModifier(HP_MOD_UUID, "PTD Health Buff", healthMultiplier, AttributeModifier.Operation.MULTIPLY_TOTAL));
             if (entity.getHealth() < entity.getMaxHealth()) entity.setHealth(entity.getMaxHealth());
         }
 
@@ -582,7 +615,7 @@ public class DifficultyHandler {
             
             double damageMultiplier = 0.0;
             if (isHardcore) {
-                damageMultiplier = factor * 2.5; // RESTAURADO: 2.0 -> 2.5
+                damageMultiplier = (factor * 2.5) + soulEaterFactor;
             } else {
                 switch (entity.level().getDifficulty()) {
                     case EASY -> damageMultiplier = 0.0;
@@ -619,8 +652,8 @@ public class DifficultyHandler {
             double finalMaxHealth = entity.getMaxHealth();
             
             if (!isBossEntity(entity) && finalMaxHealth <= 200.0) {
-                double extraHealth = baseHealth * (factor * 1.0); // REBAJADO: 1.2 -> 1.0
-                double armorBuff = extraHealth / 10.0; // REBAJADO: 8.0 -> 10.0
+                double extraHealth = baseHealth * (factor * 1.0);
+                double armorBuff = extraHealth / 10.0;
                 armorAttr.addPermanentModifier(new AttributeModifier(ARMOR_MOD_UUID, "PTD Armor Buff", armorBuff, AttributeModifier.Operation.ADDITION));
             }
         }
@@ -655,5 +688,11 @@ public class DifficultyHandler {
         
         entity.getPersistentData().remove(NBT_KEY_MAGIC_DMG_MULT);
         entity.getPersistentData().remove(NBT_KEY_DIFFICULTY_FACTOR);
+        entity.getPersistentData().remove(NBT_KEY_SOUL_EATER_FACTOR);
+
+        if (entity.hasCustomName() && entity.getCustomName().getString().equals("§c§lOVERCHARGED")) {
+            entity.setCustomName(null);
+            entity.setCustomNameVisible(false);
+        }
     }
 }
