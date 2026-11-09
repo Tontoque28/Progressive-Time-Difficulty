@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "progressivetimedifficulty",
+  "version": "${version}",
+  "name": "Progressive Time Difficulty",
+  "description": "Progressive Time Difficulty makes your world harder the longer you play! Features dynamic scaling based on world difficulty, a brutal Hardcore Mode, player-specific difficulty tracking, and special support for bosses from many popular mods. Now with Creeper exclusion for better compatibility!",
+  "authors": ["Tontoque28"],
+  "license": "All Rights Reserved",
+  "icon": "assets/progressivetimedifficulty/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.tontoque28.progressivetimedifficulty.ProgressiveTimeDifficultyMod"]
+  },
+  "mixins": ["progressivetimedifficulty.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.15.11",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
