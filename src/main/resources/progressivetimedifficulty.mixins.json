@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.tontoque28.progressivetimedifficulty.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["EntityMixin", "LivingEntityMixin", "PlayerMixin", "ProjectileMixin", "EnchantmentHelperMixin"],
+  "injectors": {"defaultRequire": 1}
+}
